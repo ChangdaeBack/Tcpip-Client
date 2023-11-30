@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="MAIN" Id="{cc9ff102-aa2f-4042-b0af-3310c7182697}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM MAIN
+VAR
+	fbCloseAll		: FB_SocketCloseAll;
+	bInitalized: BOOL;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF NOT bInitalized THEN
+	fbCloseAll(bExecute := TRUE);
+ELSE
+	Tcpip_Client();
+END_IF
+
+IF NOT fbCloseAll.bBusy THEN
+	bInitalized := TRUE;
+END_IF
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

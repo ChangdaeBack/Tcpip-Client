@@ -1,0 +1,167 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="FB_FIFO_Log" Id="{984d5897-960a-4cfc-9030-8a9ddae8b612}" SpecialFunc="None">
+    <Declaration><![CDATA[(* Log/debug/error message fifo *)
+FUNCTION_BLOCK FB_FIFO_Log
+VAR
+	_bLog		: BOOL 		:= FALSE;(* TRUE => Enable log message output, FALSE => Disable *)
+	_Name		: STRING 	:= 'Unknown::';(* Log message description string (allows the identification of log message source) *)
+	
+	bOk			: BOOL;(* TRUE = New entry added or removed succesfully, FALSE = Fifo overflow or fifo empty *)
+	sGet		: T_MaxString := '';(* String entry removed (read) from fifo *)
+	nCount		: UDINT := 0;(* Number of fifo entries *)
+	fbBuffer 	: FB_StringRingBuffer;(* Basic (lower level) string buffer control function block *)
+	buffer		: ARRAY[0..PLCPRJ_BUFFER_SIZE] OF BYTE;(* Internal buffer memory *)
+	sSource		: T_MaxString;	
+	sPut		: T_MaxString;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[;]]></ST>
+    </Implementation>
+    <Method Name="Clear" Id="{8a18f06d-3a59-48cb-b901-00c739b8d02c}">
+      <Declaration><![CDATA[METHOD Clear : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[(* Clears all fifo entries *)
+fbBuffer.A_Reset( 	pBuffer := ADR( buffer ), cbBuffer := SIZEOF( buffer ), 
+					bOk=>bOk, nCount=>nCount, getValue=>sGet ); 
+]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Error" Id="{4039f6cb-9907-4c5c-98bb-d55bcc5594ad}">
+      <Declaration><![CDATA[METHOD Error : BOOL
+VAR_INPUT
+	sMessage	: STRING 	:= '';(* String message to add (write) to the fifo *)
+	nErrID		: UDINT 	:= 0;(* Error code to add (write) to the fifo *)
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[(* Adds new fifo entry *)
+IF nErrID = 0 THEN
+	sSource := '::Error: 0x';
+ELSIF ( nErrID AND 16#80000000) = 16#80000000 THEN
+	IF nErrID = 16#80072746 THEN
+		sSource := '::Win32 error (the connection is reset by remote side): 0x';
+	ELSE
+		sSource := '::Win32 error: 0x';
+	END_IF
+ELSIF (nErrID AND 16#00008100) = 16#00008100 THEN
+	CASE nErrID OF
+		PLCPRJ_ERROR_RECEIVE_TIMEOUT:
+			sSource := '::PLC sample project receive timeout error: 0x';
+		PLCPRJ_ERROR_SENDFIFO_OVERFLOW:
+			sSource := '::PLC sample project send fifo overflow error: 0x';
+		PLCPRJ_ERROR_RECFIFO_OVERFLOW:
+			sSource := '::PLC sample project receive fifo overflow error: 0x';
+	ELSE
+		sSource := '::Other PLC sample project error: 0x';
+	END_CASE
+ELSIF (nErrID AND 16#00008000) = 16#00008000 THEN
+	sSource := '::Internal TCP/IP Connection Server error: 0x';
+ELSE
+	sSource := '::TwinCAT System error: 0x';
+END_IF
+
+sPut := CONCAT( CONCAT( CONCAT( _name, sMessage ), sSource ), DWORD_TO_HEXSTR( nErrID AND 16#FFFF, 0, FALSE ) ); 
+
+fbBuffer.A_AddTail( pBuffer:= ADR(buffer), cbBuffer:= SIZEOF(buffer),
+					putValue:= sPut, bOk=>bOk, nCount=>nCount );
+IF bOk THEN
+	IF _bLog THEN(* Log error message *)
+		ADSLOGSTR( ADSLOG_MSGTYPE_ERROR OR ADSLOG_MSGTYPE_LOG, '%s', sPut );	
+	END_IF
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="FB_init" Id="{e19353f2-08e0-456e-bf3a-3294a8ac236b}">
+      <Declaration><![CDATA[METHOD FB_init : BOOL
+VAR_INPUT
+	bInitRetains : BOOL; // if TRUE, the retain variables are initialized (warm start / cold start)
+	bInCopyCode : BOOL;  // if TRUE, the instance afterwards gets moved into the copy code (online change)
+	name : STRING;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[This^.Name := name;]]></ST>
+      </Implementation>
+    </Method>
+    <Property Name="isLogging" Id="{fbb3ca13-3bb9-4a09-b47e-0c1cb1cd0999}">
+      <Declaration><![CDATA[PROPERTY isLogging : BOOL]]></Declaration>
+      <Get Name="Get" Id="{d0db0eaf-e0f5-45d9-bd12-655e28c91971}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[isLogging := _bLog;]]></ST>
+        </Implementation>
+      </Get>
+      <Set Name="Set" Id="{938d186d-cd8e-4836-91bc-6b6110d11122}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[_bLog := isLogging;]]></ST>
+        </Implementation>
+      </Set>
+    </Property>
+    <Method Name="Message" Id="{fcf4c705-0000-48c5-a79e-7d8646760903}">
+      <Declaration><![CDATA[METHOD Message : BOOL
+VAR_INPUT
+	sMessage : STRING;
+	hSocket		: T_HSOCKET;(* Socket connection handle *)
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[(* Adds new fifo entry *)
+sPut := CONCAT( CONCAT( _name, sMessage ), CONCAT( '::', HSOCKET_TO_STRING(hSocket) ) );
+fbBuffer.A_AddTail( pBuffer:= ADR(buffer), cbBuffer:= SIZEOF(buffer),
+					putValue:= sPut, bOk=>bOk, nCount=>nCount );
+IF bOk THEN
+	IF _bLog THEN(* Log information message *)
+		ADSLOGSTR( ADSLOG_MSGTYPE_HINT OR ADSLOG_MSGTYPE_LOG, '%s', sPut );	
+	END_IF
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Property Name="Name" Id="{48c00973-a2d8-4b56-b707-ad74394df81a}">
+      <Declaration><![CDATA[PROPERTY Name : String]]></Declaration>
+      <Get Name="Get" Id="{18026785-1b2d-4c87-ac21-36cf45a3925e}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[Name := _Name;]]></ST>
+        </Implementation>
+      </Get>
+      <Set Name="Set" Id="{45214308-c499-4a34-9646-3f0f36ce9707}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[_Name := Name;]]></ST>
+        </Implementation>
+      </Set>
+    </Property>
+    <Method Name="Remove" Id="{63a6eb6e-17ab-4f50-84d2-39c63d2f3c7a}">
+      <Declaration><![CDATA[METHOD Remove : BOOL
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[(* Removes oldest fifo entry *)
+IF nCount = 0 THEN
+	sGet := '';
+	bOk := FALSE;
+	RETURN;
+END_IF
+
+fbBuffer.A_RemoveHead( pBuffer:= ADR(buffer), cbBuffer:= SIZEOF(buffer),
+						getValue=>sGet, bOk=>bOk, nCount=>nCount );
+]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

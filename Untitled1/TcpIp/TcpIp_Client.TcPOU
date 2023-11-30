@@ -1,0 +1,43 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="TcpIp_Client" Id="{1dac8d18-5720-4f8d-b9bc-d3f23b16fea5}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM TcpIp_Client
+VAR
+	ClientConnection : FB_ClientConnection;
+	
+	fbTx 		: FB_FIFO_Frame('TestTx');(* TX fifo *)
+	fbRx 		: FB_FIFO_Frame('TestRx');(* RX fifo *)
+	fbLog		: FB_FIFO_Log('TestLog');(* Log message fifo *)
+	Timer: TON;
+	bEnable: BOOL;
+	nPort: UDINT;
+	bLoging: BOOL;
+	nTest : BYTE;
+	nCounter : BYTE;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[ClientConnection.isEnabling := bEnable;
+ClientConnection.isLogging := bLoging;
+ClientConnection.Name := 'Test::';
+ClientConnection.ReconnectTime := T#40S;
+ClientConnection.RemoteHost := '127.0.0.1';
+ClientConnection.RemotePort := nPort;
+ClientConnection.Delimiter := nTest;
+ClientConnection(fbTx := fbTx, fbRx := fbRx, fbLog := fbLog);
+
+fbTx.isLogging := TRUE;
+fbRx.isLogging := TRUE;
+fbLog.isLogging := TRUE;
+
+IF ClientConnection.ConnectionState = eSocket_Connected THEN
+Timer(IN:=TRUE, PT:=T#1S);	
+	IF Timer.Q THEN
+		Timer(IN:=FALSE);
+		nCounter := nCounter + 1;
+		fbTx.AddTail(ConCAT('Hello',BYTE_TO_STRING(nCounter)));
+	END_IF
+END_IF]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

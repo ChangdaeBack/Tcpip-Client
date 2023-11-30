@@ -1,0 +1,156 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="FB_FIFO_Frame" Id="{cade88c4-bdb1-41f6-a5f5-4ab8d930928a}" SpecialFunc="None">
+    <Declaration><![CDATA[(* Tx/Rx (string data) fifo control function block *)
+FUNCTION_BLOCK FB_FIFO_Frame
+VAR
+	_Name 					: STRING := ' ';
+	_bLog					: BOOL	:= FALSE;(* TRUE => Enable log message output, FALSE => Disable *)
+	_bReady					: BOOL;   	(* TRUE = New entry added or removed succesfully, FALSE = Fifo overflow or fifo empty *)
+	_numberofString			: UDINT	:= 0;(* Number of fifo entries *)
+	_freeBufferSpace		: UDINT := 0;(* Free buffer space *)
+	_sGet : T_MAXSTRING;
+	
+	fbBuffer 	: FB_StringRingBuffer := (bOverwrite := FALSE);(* Basic (lower level) string buffer control function block *)
+	buffer		: ARRAY[-3..PLCPRJ_BUFFER_SIZE] OF BYTE;(* Internal buffer memory *)
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[]]></ST>
+    </Implementation>
+    <Method Name="AddTail" Id="{6115cb35-d55d-4507-ac71-c43c981d8e4b}">
+      <Declaration><![CDATA[METHOD AddTail
+VAR_INPUT
+	sPut		: T_MaxString 	:= '';
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[fbBuffer.A_AddTail(pBuffer := ADR(Buffer), cbBuffer := SIZEOF(buffer),
+				putValue := sPut, bOk => _bReady, nCount => _numberofString);
+				
+IF _bReady THEN 
+	_freeBufferSpace := PLCPRJ_BUFFER_SIZE - fbBuffer.cbSize; (*Calculate the free buffer space*)
+	IF _bLog THEN(*Log message*)
+		ADSLOGSTR(ADSLOG_MSGTYPE_HINT OR ADSLOG_MSGTYPE_LOG,'%s',sPut);
+	END_IF
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="Clear" Id="{91ad7be2-ced0-4481-b41c-cee8c9accb52}">
+      <Declaration><![CDATA[METHOD Clear
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[fbBuffer.A_Reset(pBuffer:=ADR(buffer), cbBuffer := SIZEOF(buffer), bOk=>_bReady, getValue => _sGet, nCount => _numberofString );
+_freeBufferSpace := PLCPRJ_BUFFER_SIZE;]]></ST>
+      </Implementation>
+    </Method>
+    <Method Name="FB_init" Id="{a71737c0-00b8-4057-aed5-7bffc816112b}">
+      <Declaration><![CDATA[METHOD FB_init : BOOL
+VAR_INPUT
+	bInitRetains : BOOL; // if TRUE, the retain variables are initialized (warm start / cold start)
+	bInCopyCode : BOOL;  // if TRUE, the instance afterwards gets moved into the copy code (online change)
+	name : STRING;
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[This^.Name := name;]]></ST>
+      </Implementation>
+    </Method>
+    <Property Name="FreeBufferSpace" Id="{1d1dbf28-b58d-42a1-93d9-bb8412b57a02}">
+      <Declaration><![CDATA[PROPERTY FreeBufferSpace : UDINT]]></Declaration>
+      <Get Name="Get" Id="{bb7ab9fe-eccd-430e-99e7-2bf762215427}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[freeBufferSpace := _freeBufferSpace;]]></ST>
+        </Implementation>
+      </Get>
+    </Property>
+    <Property Name="isLogging" Id="{1da5e5e3-6346-4cd5-82c0-870098738a0b}">
+      <Declaration><![CDATA[PROPERTY isLogging : BOOL]]></Declaration>
+      <Get Name="Get" Id="{dda36e85-e83f-4195-8da0-fab7b136f8f0}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[isLogging := _bLog;]]></ST>
+        </Implementation>
+      </Get>
+      <Set Name="Set" Id="{7cbe175f-8025-40c5-8729-130d3ab09606}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[_bLog := isLogging;]]></ST>
+        </Implementation>
+      </Set>
+    </Property>
+    <Property Name="isRemovedorAdded" Id="{277b2a6d-d019-4a38-870b-4fceeeb3403f}">
+      <Declaration><![CDATA[PROPERTY isRemovedorAdded : BOOL]]></Declaration>
+      <Get Name="Get" Id="{ee4c8fc6-ebb2-424e-9aa2-95693893d2b4}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[isRemovedorAdded := _bReady;]]></ST>
+        </Implementation>
+      </Get>
+    </Property>
+    <Property Name="Name" Id="{b3b9d7d2-00c0-46f7-bb5b-d18c9e06bd76}">
+      <Declaration><![CDATA[PROPERTY Name : String]]></Declaration>
+      <Get Name="Get" Id="{17273f52-970f-4a16-acfc-871743cc10d1}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[Name := _Name;]]></ST>
+        </Implementation>
+      </Get>
+      <Set Name="Set" Id="{246dcf82-e230-486b-9aac-ef38799fa4ff}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[_Name := Name;]]></ST>
+        </Implementation>
+      </Set>
+    </Property>
+    <Property Name="NumberofString" Id="{4eeb3811-0fae-46af-b104-6c31e2c225a9}">
+      <Declaration><![CDATA[PROPERTY NumberofString : UDINT]]></Declaration>
+      <Get Name="Get" Id="{1e19ef53-5cc1-434a-bf78-c6dcc75d4c09}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[numberofString := _numberofString;]]></ST>
+        </Implementation>
+      </Get>
+    </Property>
+    <Property Name="ReceivedString" Id="{f34e7d52-d8ff-4a36-92ab-f42af35185e0}">
+      <Declaration><![CDATA[PROPERTY ReceivedString : T_MaxString]]></Declaration>
+      <Get Name="Get" Id="{c6c1619a-4c17-4819-b920-52cb09aba209}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[ReceivedString := _sGet;]]></ST>
+        </Implementation>
+      </Get>
+    </Property>
+    <Method Name="RemoveHead" Id="{ca447831-fc1d-401b-8a84-725d422a0d56}">
+      <Declaration><![CDATA[METHOD RemoveHead
+VAR_INPUT
+END_VAR
+]]></Declaration>
+      <Implementation>
+        <ST><![CDATA[fbBuffer.A_RemoveHead(pBuffer:= ADR(buffer), cbBuffer := SIZEOF(buffer), bOk => _bReady, getValue => _sGet, nCount => _numberofString);
+
+IF _bReady THEN
+	_freeBufferSpace := PLCPRJ_BUFFER_SIZE - fbBuffer.cbSize;
+END_IF]]></ST>
+      </Implementation>
+    </Method>
+  </POU>
+</TcPlcObject>

@@ -1,0 +1,364 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="FB_ClientConnection" Id="{6f81de1c-db7a-43bc-9c93-2c8853012350}" SpecialFunc="None">
+    <Declaration><![CDATA[(* This function block implements simple TCP/IP client protocol. *)
+FUNCTION_BLOCK FB_ClientConnection
+VAR_IN_OUT
+	fbTx 		: FB_FIFO_Frame;(* TX fifo *)
+	fbRx 		: FB_FIFO_Frame;(* RX fifo *)
+	fbLog		: FB_FIFO_Log;(* Log message fifo *)
+END_VAR
+VAR
+	_sSrvNetID	: T_AmsNetID	:= '';(* TwinCAT TCP/IP server network address *)
+	_sRemoteHost	: T_IPv4Addr	:= '127.0.0.1';(* IP address of remote server *)
+	_nRemotePort	: UDINT			:= 200;(* Remote server port *)
+	_bEnable		: BOOL			:= FALSE;(* TRUE => Enable/connect, FALSE => Disable/disconnect *)
+	_tReconnect	: TIME 			:= T#45S;(* Try to reconnect after this time *)
+	_bLog		: BOOL 			:= FALSE;(* TRUE => Enable log message output, FALSE => Disable *)
+	_sPrefix		: STRING 		:= 'CLIENT::';(* Log message description string (allows the identification of log message source) *)
+
+	_eState		: E_SocketConnectionState := eSOCKET_DISCONNECTED;(* TCP/IP connection state *)
+
+	fbConnect 	: FB_ClientServerConnection;(* Create/release TCP/IP connection *)
+	fbSend		: FB_SocketSend;(* Send TCP/IP data *)
+	fbReceive	: FB_SocketReceive;(* Receive TCP/IP data *)
+	nState 		: BYTE;(* Global state *)
+	bSndBusy 	: BOOL;(* Tx state *)
+	bRcvBusy 	: BOOL;(* Rx state *)
+	bDisconnect	: BOOL;(* Disconnect flag, if set the socket will be closed *)
+
+	fbPollTimer	: TON;(* Receive poll timer *)
+	fbResponseTimer	: TON;(* Response timeout timer *)
+	fbReconnectTimer : TON;(* Reconnect timer *)
+
+	cbReceived	: UDINT;(* Count of received data bytes *)
+	cbRx		: UDINT;(* Byte length of received string *)
+	buffer		: ARRAY[0..PLCPRJ_BUFFER_SIZE] OF BYTE;(* Temp. RX buffer *)
+	sRxFrame	: T_MaxString;
+	sTxFrame	: T_MaxString;
+	i			: UDINT;
+	bAbort		: BOOL;
+	nDelimiter : BYTE := 16#0;
+	
+END_VAR
+
+VAR CONSTANT
+	PLCPRJ_RECEIVE_POLLING_TIME				: TIME := T#100MS;
+	PLCPRJ_RECEIVE_TIMEOUT					: TIME := T#50S;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[CASE nState OF
+	0:(* Connect *)
+		fbConnect( 	sSrvNetID 		:= _sSrvNetID,
+					nMode			:= SEL( _bLog, 0, CONNECT_MODE_ENABLEDBG),(* Enable/disable debug messages? *)
+					sRemoteHost 	:= _sRemoteHost, nRemotePort := _nRemotePort,
+					bEnable			:= _bEnable, tReconnect	:= _tReconnect,
+					eState			=> _eState );
+		IF NOT fbConnect.bBusy THEN
+			IF NOT fbConnect.bError THEN
+				IF _eState = eSOCKET_CONNECTED THEN(* We are connected *)
+					
+					fbTx.Clear();(* Clear TX fifo (optional) *)
+					fbRx.Clear();(* Clear RX fifo (optional) *)
+					fbLog.Clear();(* Clear log fifo (optional) *)
+					bSndBusy := FALSE;
+					bRcvBusy := FALSE;
+					bDisconnect 	:= FALSE;
+					cbReceived 		:= 0;
+
+					fbPollTimer( IN := FALSE, PT := T#0S );
+					fbResponseTimer( IN := FALSE, PT := PLCPRJ_RECEIVE_TIMEOUT );
+					fbReconnectTimer( IN := FALSE, PT := _tReconnect );
+				
+					fbLog.Message( sMessage := 'Connection established!', hSocket := fbConnect.hSocket );
+					nState := 1;
+				END_IF
+			ELSE(* Connect error => log error *)
+				fbLog.Error( sMessage := 'FB_ClientServerConnection()', nErrID := fbConnect.nErrId );
+			END_IF
+		END_IF
+
+
+	1:(* Data exchange state *)
+		bDisconnect := NOT _bEnable OR bDisconnect;(* User/internal disconnect requested? *)
+		IF bDisconnect AND NOT bSndBusy AND NOT bRcvBusy THEN
+			bDisconnect := FALSE;
+			fbLog.Message( sMessage := 'Closing connection!', hSocket := fbConnect.hSocket );
+			nState := 2;(* Disconnect *)
+		ELSE
+
+			(* ------------------ Send tx data -------------------------------------- *)
+			IF NOT bDisconnect AND NOT bSndBusy THEN
+				fbTx.RemoveHead();(* Remove oldest string entry *)
+				sTxFrame := fbTx.ReceivedString;
+				IF fbTx.isRemovedorAdded THEN(* Success *)
+					fbSend( bExecute := FALSE );
+					fbSend(	sSrvNetID 	:= _sSrvNetID,
+							hSocket		:= fbConnect.hSocket,
+							cbLen		:= INT_TO_UDINT(LEN( sTxFrame )) + 1,(* Send string inclusive string (null) delimiter! *)
+							pSrc		:= ADR( sTxFrame ),(* Address of the string variable *)
+							bExecute	:= TRUE );
+					bSndBusy := TRUE;
+				END_IF
+			ELSE(* Wait until send not busy *)
+				fbSend( bExecute := FALSE );
+				IF NOT fbSend.bBusy THEN
+					bSndBusy := FALSE;
+					IF fbSend.bError THEN(* Send error => log error and disconnect *)
+						fbLog.Error( sMessage := 'FB_SocketSend()', nErrID := fbSend.nErrId );
+						bDisconnect := TRUE;(* Set flag *)
+					END_IF
+				END_IF
+			END_IF
+			(* ---------------------------------------------------------------------- *)
+
+
+			(* ---------------------- Get rx data ----------------------------------- *)
+			IF NOT bDisconnect AND NOT bRcvBusy THEN
+				
+				fbPollTimer( IN := TRUE );
+				IF fbPollTimer.Q THEN
+					IF fbRx.freeBufferSpace >= SIZEOF(sRxFrame) THEN(* Check free rx fifo space *)
+						fbPollTimer( IN := FALSE, PT := PLCPRJ_RECEIVE_POLLING_TIME );
+						fbReceive( bExecute := FALSE );
+						fbReceive( 	sSrvNetId	:= _sSrvNetID,
+									hSocket		:= fbConnect.hSocket,
+									cbLen		:= SIZEOF(buffer) - cbReceived,
+									pDest		:= ADR(buffer) + cbReceived,
+									bExecute	:= TRUE );
+						bRcvBusy := TRUE;
+					END_IF
+				END_IF
+				
+			ELSE(* Wait until receive not busy *)
+
+				fbReceive( bExecute := FALSE );
+				IF NOT fbReceive.bBusy THEN
+					bRcvBusy := FALSE;
+					IF NOT fbReceive.bError THEN
+						IF fbReceive.nRecBytes > 0 THEN(* Bytes received *)
+							
+							fbPollTimer( IN := FALSE, PT := T#0S );(* Bytes received => increase the read (polling) speed *)
+							fbResponseTimer( IN := FALSE );(* Bytes received => disable timeout check *)
+							cbReceived := cbReceived + fbReceive.nRecBytes;(* Calculate the number of received data bytes *)
+
+							(* Parse received bytes and extract strings *)
+							REPEAT
+								bAbort := TRUE;(* set flag *)
+								IF cbReceived > 0 THEN
+
+									(* Search for string null delimiter *)
+									FOR i:= 0 TO cbReceived - 1 BY 1 DO
+										IF buffer[i] = nDelimiter THEN (* End of string position found *)
+
+											cbRx := i + 1;(* Calculate the length of string (inclusive the end delimiter) *)
+											MEMCPY( ADR(sRxFrame), ADR(buffer), MIN(cbRx, SIZEOF(sRxFrame) ) );(* Copy string bytes to temp string variable *)
+
+											fbRx.AddTail( sPut := sRxFrame );(* Add string to the rx fifo *)
+											IF fbRx.isRemovedorAdded THEN
+												MEMMOVE( ADR(buffer), ADR(buffer) + cbRx, cbReceived - cbRx );(* Move/shift remaining bytes in buffer *)
+												cbReceived := cbReceived - cbRx;(* Recalculate the remaining data length *)
+
+												IF fbRx.freeBufferSpace >= SIZEOF(sRxFrame) THEN (* Check free rx buffer space *)
+													bAbort := FALSE;(* Reset flag, try to parse the next string *)
+												END_IF
+											ELSE(* Fifo overflow => log error and disconnect *)
+												fbLog.Error( sMessage := 'FB_FrameFifo(receiver)', nErrID := PLCPRJ_ERROR_RECFIFO_OVERFLOW );
+												bDisconnect := TRUE;(* set flag *)
+												RETURN;
+											END_IF
+
+											EXIT; (* buffer[i] = 0을 찾으면 Exit *)
+										END_IF
+									END_FOR
+
+								END_IF (* IF cbReceived > 0 THEN *)
+
+							UNTIL bAbort
+							END_REPEAT
+
+						ELSE(* No bytes received *)
+							fbResponseTimer( IN := TRUE );(* No bytes received => enable timeout check *)
+							IF fbResponseTimer.Q THEN (* Timeout error*)
+								fbResponseTimer( IN := FALSE );
+								fbLog.Error( sMessage := 'FB_SocketReceive()', nErrID := PLCPRJ_ERROR_RECEIVE_TIMEOUT );
+								bDisconnect := TRUE;(* Set flag *)
+							END_IF							
+						END_IF(* IF fbReceive.nRecBytes > 0 THEN *)
+					ELSE(* Receive error => log error and disconnect *)
+						fbLog.Error( sMessage := 'FB_SocketReceive()', nErrID := fbReceive.nErrId );
+						bDisconnect := TRUE;(* set flag *)
+					END_IF
+					
+				END_IF(* IF NOT fbReceive.bBusy THEN *) 
+	
+			END_IF(* IF NOT bDisconnect AND NOT bRcvBusy THEN *)
+			(* ---------------------------------------------------------------------- *)
+			
+
+		END_IF(* IF bDisconnect AND NOT bSndBusy AND NOT bRcvBusy THEN *)
+
+
+	2:(* Disconnect *)
+		fbConnect( bEnable:= FALSE, eState=>_eState );
+		IF _eState = eSOCKET_DISCONNECTED THEN
+			fbReconnectTimer( IN := TRUE );(* Please wait some seconds and then try to connect again *)
+			IF fbReconnectTimer.Q THEN
+				fbReconnectTimer( IN := FALSE );
+				nState := 0;
+			END_IF
+		END_IF
+END_CASE]]></ST>
+    </Implementation>
+    <Property Name="ConnectionState" Id="{850b77ff-e3c2-4832-a61b-afa24b88e63e}">
+      <Declaration><![CDATA[PROPERTY ConnectionState : E_SocketConnectionState := eSocket_Disconnected]]></Declaration>
+      <Get Name="Get" Id="{924bab37-808c-4bba-9b8d-03b8a4da1726}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[ConnectionState := _eState;]]></ST>
+        </Implementation>
+      </Get>
+    </Property>
+    <Property Name="Delimiter" Id="{b3b25450-31db-4883-ad1e-7b90f715228d}">
+      <Declaration><![CDATA[PROPERTY Delimiter : BYTE := 16#1;
+]]></Declaration>
+      <Get Name="Get" Id="{65ea7ebf-eb1a-49c0-af67-9e37425dd8ff}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[Delimiter := nDelimiter; ]]></ST>
+        </Implementation>
+      </Get>
+      <Set Name="Set" Id="{3fc25c96-2f7a-497f-834b-528c94037b87}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[nDelimiter := Delimiter;]]></ST>
+        </Implementation>
+      </Set>
+    </Property>
+    <Property Name="isEnabling" Id="{9a119702-4230-41bd-8c6c-18a772bde2fc}">
+      <Declaration><![CDATA[PROPERTY isEnabling : BOOL := false]]></Declaration>
+      <Get Name="Get" Id="{26fe3c3f-0eca-4543-aa53-7b2476c60483}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[isEnabling := _bEnable;]]></ST>
+        </Implementation>
+      </Get>
+      <Set Name="Set" Id="{233eeb0f-cc7a-4f19-9518-9e174bb968f5}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[_bEnable := isEnabling;]]></ST>
+        </Implementation>
+      </Set>
+    </Property>
+    <Property Name="isLogging" Id="{2a2b6681-6515-4d83-8333-f1ab0adbf6cb}">
+      <Declaration><![CDATA[PROPERTY isLogging : BOOL]]></Declaration>
+      <Get Name="Get" Id="{4c549226-a367-4896-b351-990f0d4250c0}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[isLogging := _bLog;]]></ST>
+        </Implementation>
+      </Get>
+      <Set Name="Set" Id="{711b262c-df60-4303-983b-f99d7a0dd8db}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[_bLog := isLogging;]]></ST>
+        </Implementation>
+      </Set>
+    </Property>
+    <Property Name="Name" Id="{22fd8678-944b-417a-8166-ff496ed30753}">
+      <Declaration><![CDATA[PROPERTY Name : STRING]]></Declaration>
+      <Get Name="Get" Id="{145f37ff-c366-4e7b-994c-4176be5e36a6}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[Name := _sPrefix;]]></ST>
+        </Implementation>
+      </Get>
+      <Set Name="Set" Id="{d499fd7b-1975-442f-bdcc-8d6908588a49}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[_sPrefix := Name;]]></ST>
+        </Implementation>
+      </Set>
+    </Property>
+    <Property Name="ReconnectTime" Id="{868cc62a-0a3c-4433-8490-2dbed36ef85a}">
+      <Declaration><![CDATA[PROPERTY ReconnectTime : Time]]></Declaration>
+      <Get Name="Get" Id="{fbf59a63-f86e-4ec6-83c0-66f0979f9e88}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[reconnectTime := _tReconnect;]]></ST>
+        </Implementation>
+      </Get>
+      <Set Name="Set" Id="{d7c4920e-ba84-40f8-990c-6651d3112d06}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[(* ReconnectTime must be morethan 30s *)
+IF reconnectTime > T#30S THEN
+	_tReconnect := reconnectTime;
+ELSE
+	reconnectTime := T#31S;
+END_IF]]></ST>
+        </Implementation>
+      </Set>
+    </Property>
+    <Property Name="RemoteHost" Id="{a7a73908-1011-4387-817c-0551c2679f37}">
+      <Declaration><![CDATA[PROPERTY RemoteHost : T_IPv4Addr]]></Declaration>
+      <Get Name="Get" Id="{a4683f8c-70d4-4e39-aaae-02f324461fa5}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[RemoteHost := _sRemoteHost;]]></ST>
+        </Implementation>
+      </Get>
+      <Set Name="Set" Id="{25b3dd52-4b20-4761-b5eb-a8f2fdc1175f}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[_sRemoteHost := RemoteHost;]]></ST>
+        </Implementation>
+      </Set>
+    </Property>
+    <Property Name="RemotePort" Id="{bb4c9e50-571f-4e9e-8e9c-0ae1ded71b34}">
+      <Declaration><![CDATA[PROPERTY RemotePort : UDINT;]]></Declaration>
+      <Get Name="Get" Id="{4ef836d1-6f61-4445-9b2b-8c35b9e485d1}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[RemotePort := _nRemotePort;]]></ST>
+        </Implementation>
+      </Get>
+      <Set Name="Set" Id="{7734825f-b31b-4603-936b-1a92ba5b81b4}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[_nRemotePort := RemotePort;]]></ST>
+        </Implementation>
+      </Set>
+    </Property>
+  </POU>
+</TcPlcObject>
