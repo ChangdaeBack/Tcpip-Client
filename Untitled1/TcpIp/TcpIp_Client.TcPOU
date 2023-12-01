@@ -17,20 +17,22 @@ VAR
 END_VAR
 ]]></Declaration>
     <Implementation>
-      <ST><![CDATA[ClientConnection.isEnabling := bEnable;
+      <ST><![CDATA[(* Should be Edited *)
+
+ClientConnection.isEnabling := bEnable;
 ClientConnection.isLogging := bLoging;
 ClientConnection.Name := 'Test::';
 ClientConnection.ReconnectTime := T#40S;
 ClientConnection.RemoteHost := '127.0.0.1';
 ClientConnection.RemotePort := nPort;
-ClientConnection.Delimiter := nTest;
+ClientConnection.Suffix := nTest;
 ClientConnection(fbTx := fbTx, fbRx := fbRx, fbLog := fbLog);
 
 fbTx.isLogging := TRUE;
 fbRx.isLogging := TRUE;
 fbLog.isLogging := TRUE;
 
-IF ClientConnection.ConnectionState = eSocket_Connected THEN
+IF ClientConnection.ConnectionState = eSocket_Connected THEN (* Connected *)
 Timer(IN:=TRUE, PT:=T#1S);	
 	IF Timer.Q THEN
 		Timer(IN:=FALSE);
