@@ -16,7 +16,7 @@ VAR
 	_tReconnect	: TIME 			:= T#45S;(* Try to reconnect after this time *)
 	_bLog		: BOOL 			:= FALSE;(* TRUE => Enable log message output, FALSE => Disable *)
 	_sPrefix		: STRING 		:= 'CLIENT::';(* Log message description string (allows the identification of log message source) *)
-
+	_nSuffix		: BYTE := 16#0;
 	_eState		: E_SocketConnectionState := eSOCKET_DISCONNECTED;(* TCP/IP connection state *)
 
 	fbConnect 	: FB_ClientServerConnection;(* Create/release TCP/IP connection *)
@@ -38,7 +38,7 @@ VAR
 	sTxFrame	: T_MaxString;
 	i			: UDINT;
 	bAbort		: BOOL;
-	nDelimiter : BYTE := 16#0;
+	
 	
 END_VAR
 
@@ -149,7 +149,7 @@ END_VAR]]></Declaration>
 
 									(* Search for string null delimiter *)
 									FOR i:= 0 TO cbReceived - 1 BY 1 DO
-										IF buffer[i] = nDelimiter THEN (* End of string position found *)
+										IF buffer[i] = _nSuffix THEN (* End of string position found *)
 
 											cbRx := i + 1;(* Calculate the length of string (inclusive the end delimiter) *)
 											MEMCPY( ADR(sRxFrame), ADR(buffer), MIN(cbRx, SIZEOF(sRxFrame) ) );(* Copy string bytes to temp string variable *)
@@ -220,26 +220,6 @@ END_VAR
           <ST><![CDATA[ConnectionState := _eState;]]></ST>
         </Implementation>
       </Get>
-    </Property>
-    <Property Name="Delimiter" Id="{b3b25450-31db-4883-ad1e-7b90f715228d}">
-      <Declaration><![CDATA[PROPERTY Delimiter : BYTE := 16#1;
-]]></Declaration>
-      <Get Name="Get" Id="{65ea7ebf-eb1a-49c0-af67-9e37425dd8ff}">
-        <Declaration><![CDATA[VAR
-END_VAR
-]]></Declaration>
-        <Implementation>
-          <ST><![CDATA[Delimiter := nDelimiter; ]]></ST>
-        </Implementation>
-      </Get>
-      <Set Name="Set" Id="{3fc25c96-2f7a-497f-834b-528c94037b87}">
-        <Declaration><![CDATA[VAR
-END_VAR
-]]></Declaration>
-        <Implementation>
-          <ST><![CDATA[nDelimiter := Delimiter;]]></ST>
-        </Implementation>
-      </Set>
     </Property>
     <Property Name="isEnabling" Id="{9a119702-4230-41bd-8c6c-18a772bde2fc}">
       <Declaration><![CDATA[PROPERTY isEnabling : BOOL := false]]></Declaration>
@@ -357,6 +337,26 @@ END_VAR
 ]]></Declaration>
         <Implementation>
           <ST><![CDATA[_nRemotePort := RemotePort;]]></ST>
+        </Implementation>
+      </Set>
+    </Property>
+    <Property Name="Suffix" Id="{b3b25450-31db-4883-ad1e-7b90f715228d}">
+      <Declaration><![CDATA[PROPERTY Suffix : BYTE := 16#1;
+]]></Declaration>
+      <Get Name="Get" Id="{65ea7ebf-eb1a-49c0-af67-9e37425dd8ff}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[Suffix := _nSuffix; ]]></ST>
+        </Implementation>
+      </Get>
+      <Set Name="Set" Id="{3fc25c96-2f7a-497f-834b-528c94037b87}">
+        <Declaration><![CDATA[VAR
+END_VAR
+]]></Declaration>
+        <Implementation>
+          <ST><![CDATA[_nSuffix := Suffix;]]></ST>
         </Implementation>
       </Set>
     </Property>
